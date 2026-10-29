@@ -1,0 +1,22 @@
+{
+  "name": "chaintrust-reputation",
+  "version": "1.0.0",
+  "description": "Blockchain-based decentralized trust and reputation system with Sybil resistance and rater privacy (IILM University B.Tech CSE capstone project — working Solidity implementation).",
+  "main": "hardhat.config.js",
+  "license": "MIT",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "coverage": "hardhat coverage",
+    "node": "hardhat node",
+    "deploy:local": "hardhat run scripts/deploy.js --network localhost",
+    "issue-credential": "hardhat run scripts/issueCredential.js --network localhost",
+    "verify-credential": "node scripts/verifyCredential.js"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@openzeppelin/contracts": "^5.6.1",
+    "dotenv": "^18.0.9",
+    "hardhat": "^2.29.1"
+  }
+}
