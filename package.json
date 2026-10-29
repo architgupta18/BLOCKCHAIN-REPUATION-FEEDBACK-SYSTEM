@@ -9,6 +9,7 @@
     "test": "hardhat test",
     "coverage": "hardhat coverage",
     "node": "hardhat node",
+    "ui": "node ui/serve.js",
     "deploy:local": "hardhat run scripts/deploy.js --network localhost",
     "issue-credential": "hardhat run scripts/issueCredential.js --network localhost",
     "verify-credential": "node scripts/verifyCredential.js"

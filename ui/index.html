@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChainTrust Reputation</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #1a1d23; --muted: #667085; --line: #e3e6eb;
+    --accent: #3b5bdb; --accent-text: #fff; --ok: #1a7f4b; --bad: #c92a2a; --code: #eef0f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12141a; --card: #1b1e26; --text: #e8eaf0; --muted: #8b93a5; --line: #2a2e39;
+      --accent: #5c7cfa; --ok: #51cf66; --bad: #ff6b6b; --code: #252935;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+  header { padding: 20px 16px 8px; max-width: 980px; margin: 0 auto; }
+  h1 { margin: 0; font-size: 22px; }
+  header p { margin: 2px 0 0; color: var(--muted); }
+  main { max-width: 980px; margin: 0 auto; padding: 8px 16px 40px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  section.wide { grid-column: 1 / -1; }
+  h2 { margin: 0 0 10px; font-size: 16px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 3px; }
+  input, select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+  button { padding: 8px 14px; border: 0; border-radius: 6px; background: var(--accent); color: var(--accent-text); font: inherit; cursor: pointer; margin: 10px 8px 0 0; }
+  button.secondary { background: var(--code); color: var(--text); }
+  button:disabled { opacity: .5; cursor: wait; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+  .stat { font-size: 26px; font-weight: 600; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 99px; font-size: 12px; background: var(--code); }
+  .pill.ok { color: var(--ok); } .pill.bad { color: var(--bad); }
+  #log { font: 12px/1.6 ui-monospace, Consolas, monospace; max-height: 220px; overflow: auto; background: var(--code); border-radius: 6px; padding: 8px 10px; }
+  #log .err { color: var(--bad); } #log .ok { color: var(--ok); }
+</style>
+</head>
+<body>
+<header>
+  <h1>ChainTrust Reputation</h1>
+  <p>Stake-based identity, commit-reveal ratings, decaying reputation. Local Hardhat node only.</p>
+</header>
+<main>
+  <section class="wide">
+    <h2>Account</h2>
+    <label for="acct">Acting as (unlocked Hardhat accounts)</label>
+    <select id="acct"></select>
+    <p class="muted" id="acctInfo"></p>
+    <p class="muted" id="conn"></p>
+  </section>
+
+  <section>
+    <h2>1. Identity</h2>
+    <div class="row"><span>Stake: <b id="stake">–</b> ETH</span> <span id="eligible" class="pill">–</span></div>
+    <p class="muted">Rating requires locking at least 0.01 ETH, then registering.</p>
+    <button id="deposit">Deposit 0.01 ETH</button>
+    <button id="register">Register with stake</button>
+  </section>
+
+  <section>
+    <h2>2. Look up reputation</h2>
+    <label for="lookSubject">Subject address</label><input id="lookSubject">
+    <label for="lookCtx">Context</label><input id="lookCtx" value="demo">
+    <div class="row" style="margin-top:12px"><span class="stat" id="score">–</span><span class="muted" id="count"></span></div>
+    <button id="lookup">Look up</button>
+  </section>
+
+  <section class="wide">
+    <h2>3. Rate someone (commit, wait, reveal)</h2>
+    <div class="row">
+      <div style="flex:2;min-width:260px"><label for="rateSubject">Subject address (not yourself)</label><input id="rateSubject"></div>
+      <div style="flex:1;min-width:140px"><label for="rateCtx">Context</label><input id="rateCtx" value="demo"></div>
+      <div style="flex:1;min-width:100px"><label for="rating">Rating (1–5)</label><input id="rating" type="number" min="1" max="5" value="5"></div>
+    </div>
+    <button id="commit">Commit rating</button>
+    <button id="advance" class="secondary">Advance chain 1 day</button>
+    <button id="reveal">Reveal rating</button>
+    <p class="muted">The rating stays hidden until reveal. The salt is kept in this browser's localStorage. Reveal opens after 1 day and closes after 2; "Advance chain" fast-forwards the local node.</p>
+  </section>
+
+  <section class="wide">
+    <h2>Activity</h2>
+    <div id="log"></div>
+  </section>
+</main>
+
+<script>
+const { ethers } = window;
+const RPC = "http://127.0.0.1:8545";
+const ABI = {
+  StakeRegistry: ["function deposit() payable", "function stakeOf(address) view returns (uint256)"],
+  IdentityRegistry: ["function registerWithStake()", "function isEligibleRater(address) view returns (bool)"],
+  ReputationEngine: [
+    "function commitRating(address subject, bytes32 context, bytes32 commitHash)",
+    "function revealRating(address subject, bytes32 context, uint256 ratingValue, bytes32 salt)",
+    "function currentScore(address, bytes32) view returns (uint256)",
+    "function ratingCount(address, bytes32) view returns (uint256)",
+  ],
+};
+const $ = (id) => document.getElementById(id);
+const ctxOf = (label) => ethers.keccak256(ethers.toUtf8Bytes(label));
+const provider = new ethers.JsonRpcProvider(RPC);
+let addrs, accounts = [], signer, me;
+
+function log(msg, cls = "") {
+  const d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.textContent = `${new Date().toLocaleTimeString()}  ${msg}`;
+  $("log").prepend(d);
+}
+const errText = (e) => e.reason || e.shortMessage || e.message;
+const contract = (name) => new ethers.Contract(addrs[name], ABI[name], signer);
+
+async function run(btn, label, fn) {
+  btn.disabled = true;
+  try { await fn(); log(label + " ✓", "ok"); }
+  catch (e) { log(`${label} failed: ${errText(e)}`, "err"); }
+  finally { btn.disabled = false; await refresh(); }
+}
+
+async function refresh() {
+  if (!signer) return;
+  const [stake, eligible, bal] = await Promise.all([
+    contract("StakeRegistry").stakeOf(me),
+    contract("IdentityRegistry").isEligibleRater(me),
+    provider.getBalance(me),
+  ]);
+  $("stake").textContent = ethers.formatEther(stake);
+  $("eligible").textContent = eligible ? "eligible rater" : "not registered";
+  $("eligible").className = "pill " + (eligible ? "ok" : "bad");
+  $("acctInfo").textContent = `${me} · ${Number(ethers.formatEther(bal)).toFixed(4)} ETH`;
+}
+
+async function selectAccount(i) {
+  me = accounts[i];
+  signer = await provider.getSigner(me);
+  await refresh();
+}
+
+async function init() {
+  try {
+    addrs = (await (await fetch("/deployment.json")).json()).contracts;
+    accounts = await provider.send("eth_accounts", []);
+    const chain = (await provider.getNetwork()).chainId;
+    $("conn").textContent = `Connected to chain ${chain} at ${RPC}`;
+    $("acct").innerHTML = accounts.map((a, i) => `<option value="${i}">Account #${i} — ${a}</option>`).join("");
+    $("acct").onchange = (e) => selectAccount(+e.target.value);
+    await selectAccount(0);
+    if (accounts[1]) { $("rateSubject").value = $("lookSubject").value = accounts[1]; }
+    log("Ready. Tip: deposit and register as Account #0, then rate Account #1.");
+  } catch (e) {
+    $("conn").textContent = "Could not connect. Start `npm run node` and `npm run deploy:local` first.";
+    log(errText(e), "err");
+  }
+}
+
+$("deposit").onclick = (e) => run(e.target, "Deposit 0.01 ETH", async () =>
+  (await contract("StakeRegistry").deposit({ value: ethers.parseEther("0.01") })).wait());
+$("register").onclick = (e) => run(e.target, "Register with stake", async () =>
+  (await contract("IdentityRegistry").registerWithStake()).wait());
+
+$("lookup").onclick = (e) => run(e.target, "Look up", async () => {
+  const subject = $("lookSubject").value.trim(), ctx = ctxOf($("lookCtx").value);
+  const eng = contract("ReputationEngine");
+  const [s, c] = await Promise.all([eng.currentScore(subject, ctx), eng.ratingCount(subject, ctx)]);
+  $("score").textContent = (Number(s) / 1e4).toFixed(4);
+  $("count").textContent = `${c} rating(s) · raw ${s}/10000`;
+});
+
+const saltKey = (subject, ctx) => `salt:${me}:${subject.toLowerCase()}:${ctx}`;
+
+$("commit").onclick = (e) => run(e.target, "Commit rating", async () => {
+  const subject = ethers.getAddress($("rateSubject").value.trim());
+  const ctx = ctxOf($("rateCtx").value), rating = +$("rating").value;
+  const salt = ethers.hexlify(ethers.randomBytes(32));
+  const hash = ethers.solidityPackedKeccak256(
+    ["address", "bytes32", "address", "uint256", "bytes32"], [subject, ctx, me, rating, salt]);
+  await (await contract("ReputationEngine").commitRating(subject, ctx, hash)).wait();
+  localStorage.setItem(saltKey(subject, ctx), JSON.stringify({ rating, salt }));
+});
+
+$("advance").onclick = (e) => run(e.target, "Advance 1 day", async () => {
+  await provider.send("evm_increaseTime", [86400 + 1]);
+  await provider.send("evm_mine", []);
+});
+
+$("reveal").onclick = (e) => run(e.target, "Reveal rating", async () => {
+  const subject = ethers.getAddress($("rateSubject").value.trim()), ctx = ctxOf($("rateCtx").value);
+  const saved = JSON.parse(localStorage.getItem(saltKey(subject, ctx)) || "null");
+  if (!saved) throw new Error("No saved commitment for this account/subject/context");
+  await (await contract("ReputationEngine").revealRating(subject, ctx, saved.rating, saved.salt)).wait();
+});
+
+init();
+</script>
+</body>
+</html>
